@@ -1,0 +1,246 @@
+// code for ESP32 to send data to the backend server
+
+#include <SPI.h>
+#include <MFRC522.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <ESP32Servo.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// WIFI
+const char* ssid = "BSNL CO 2.4";
+const char* password = "Routeco@123";
+
+// Backend URL
+String serverURL = "http://192.168.2.81:5000/api/parking/update";
+
+// RFID
+#define SS_PIN 5
+#define RST_PIN 4
+MFRC522 rfid(SS_PIN, RST_PIN);
+
+// OLED
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Servo
+Servo gateServo;
+int servoPin = 13;
+
+// Parking slots
+int availableSlots = 2;
+String parkedCars[2] = {"",""};
+
+void setup() {
+
+  Serial.begin(115200);
+  delay(1000);
+
+  connectWiFi();
+
+  // OLED
+  Wire.begin(21,22);
+
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED FAILED");
+    while(true);
+  }
+
+  display.setTextColor(WHITE);
+
+  // Servo
+  gateServo.attach(servoPin);
+  gateServo.write(0);
+
+  // RFID
+  SPI.begin(18,19,23,5);
+  rfid.PCD_Init();
+
+  Serial.println("System Ready");
+
+  displayStatus();
+}
+
+void loop() {
+
+  if (!rfid.PICC_IsNewCardPresent()) return;
+  if (!rfid.PICC_ReadCardSerial()) return;
+
+  String uid="";
+
+  for (byte i=0;i<rfid.uid.size;i++){
+    uid += String(rfid.uid.uidByte[i], HEX);
+  }
+
+  Serial.print("Card UID: ");
+  Serial.println(uid);
+
+  handleParking(uid);
+
+  rfid.PICC_HaltA();
+}
+
+void handleParking(String uid){
+
+  int index = findUID(uid);
+
+  // EXIT
+  if(index != -1){
+
+    parkedCars[index] = "";
+    availableSlots++;
+
+    Serial.println("Vehicle EXIT");
+
+    displayUpdate("Updating","info");
+
+    sendParkingEvent(uid,"exit");
+
+    openGate();
+    displayStatus();
+    return;
+  }
+
+  // ENTRY
+  if(availableSlots > 0){
+
+    for(int i=0;i<2;i++){
+      if(parkedCars[i] == ""){
+        parkedCars[i] = uid;
+        break;
+      }
+    }
+
+    availableSlots--;
+
+    Serial.println("Vehicle ENTER");
+
+    displayUpdate("Updating","info");
+
+    sendParkingEvent(uid,"entry");
+
+    openGate();
+    displayStatus();
+  }
+  else{
+
+    displayUpdate("Parking","FULL");
+    Serial.println("Parking FULL");
+  }
+}
+
+int findUID(String uid){
+
+  for(int i=0;i<2;i++){
+    if(parkedCars[i] == uid){
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+void openGate(){
+
+  gateServo.write(90);
+  delay(3000);
+  gateServo.write(0);
+}
+
+void displayStatus(){
+
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setCursor(0,0);
+  display.println("Parking A");
+
+  display.setTextSize(2);
+  display.setCursor(0,25);
+  display.print("Free: ");
+  display.println(availableSlots);
+
+  display.display();
+}
+
+void displayUpdate(String line1,String line2){
+
+  display.clearDisplay();
+
+  display.setTextSize(2);
+  display.setCursor(10,10);
+  display.println(line1);
+
+  display.setCursor(10,35);
+  display.println(line2);
+
+  display.display();
+
+  delay(1500);
+}
+
+void connectWiFi(){
+
+  Serial.println("Connecting WiFi...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid,password);
+
+  while(WiFi.status()!=WL_CONNECTED){
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi Connected!");
+  Serial.print("ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void sendParkingEvent(String uid,String action){
+
+  if(WiFi.status()!=WL_CONNECTED){
+    connectWiFi();
+  }
+
+  HTTPClient http;
+  WiFiClient client;
+
+  http.begin(client,serverURL);
+  http.addHeader("Content-Type","application/json");
+
+  String json = "{";
+  json += "\"uid\":\""+uid+"\",";
+  json += "\"zone\":\"A\",";
+  json += "\"action\":\""+action+"\",";
+  json += "\"time\":\""+String(millis())+"\"";
+  json += "}";
+
+  Serial.println("Sending JSON:");
+  Serial.println(json);
+
+  int httpResponseCode = http.POST(json);
+
+  if(httpResponseCode > 0){
+
+    Serial.print("HTTP Response Code: ");
+    Serial.println(httpResponseCode);
+
+    String response = http.getString();
+    Serial.println("Server Response:");
+    Serial.println(response);
+
+  }
+  else{
+
+    Serial.print("HTTP Error: ");
+    Serial.println(httpResponseCode);
+
+    Serial.print("Reason: ");
+    Serial.println(http.errorToString(httpResponseCode));
+  }
+
+  http.end();
+}
