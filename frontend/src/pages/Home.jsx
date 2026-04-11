@@ -16,7 +16,7 @@ return(
 text-[160px] font-extrabold text-transparent bg-clip-text
 bg-gradient-to-r from-purple-500 via-pink-500 to-orange-500
 opacity-20 select-none pointer-events-none">
-SCETATHON
+NULLPOINTERS
 </h1>
 
 {/* Cards */}
