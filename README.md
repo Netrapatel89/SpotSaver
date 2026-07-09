@@ -1,4 +1,4 @@
-# Spotsaver
+# ParkMatrix
 
 A smart parking management project with a React frontend and an Express/MongoDB backend.
 
